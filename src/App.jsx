@@ -649,34 +649,33 @@ function FilesPage({ addToast }) {
 }
 
 // ─── UPLOAD PAGE ──────────────────────────────────────────────────────────────
-function UploadPage({ addToast, onUploadSuccess }) {
+function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
   const [dragging, setDragging] = useState(false);
-  const [staged, setStaged] = useState([]); // { file, category, notes, progress, status }
+  const [staged, setStaged] = useState([]); // { file, category, notes, progress, status, duplicate }
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef();
 
   const addFiles = (fileList) => {
-  const newFiles = Array.from(fileList).map((file) => ({
-    id: Math.random().toString(36).slice(2),
-    file,
-    category: "Uncategorized",
-    notes: "",
-    progress: 0,
-    status: "idle",
-    duplicate: false,
-  }));
-  
-  // Check for duplicates against existing files in the library
-  setStaged((prev) => {
-    const allStaged = [...prev, ...newFiles];
-    return allStaged.map((item) => ({
-      ...item,
-      duplicate: files.some(
-        (f) => f.original_name.toLowerCase() === item.file.name.toLowerCase()
-      ),
+    const newFiles = Array.from(fileList).map((file) => ({
+      id: Math.random().toString(36).slice(2),
+      file,
+      category: "Uncategorized",
+      notes: "",
+      progress: 0,
+      status: "idle",
+      duplicate: false,
     }));
-  });
-};
+
+    setStaged((prev) => {
+      const allStaged = [...prev, ...newFiles];
+      return allStaged.map((item) => ({
+        ...item,
+        duplicate: existingFiles.some(
+          (f) => f.original_name.toLowerCase() === item.file.name.toLowerCase()
+        ),
+      }));
+    });
+  };
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -691,15 +690,14 @@ function UploadPage({ addToast, onUploadSuccess }) {
   const removeStaged = (id) => setStaged((prev) => prev.filter((s) => s.id !== id));
 
   const handleUpload = async () => {
-  if (staged.length === 0 || uploading) return;
-  
-  const hasDuplicates = staged.some((s) => s.duplicate && s.status === "idle");
-  if (hasDuplicates && !window.confirm(
-    "Some files already exist in the library. Upload anyway and keep both?"
-  )) return;
+    if (staged.length === 0 || uploading) return;
 
-  setUploading(true);
-  // ... rest of upload logic unchanged
+    const hasDuplicates = staged.some((s) => s.duplicate && s.status === "idle");
+    if (hasDuplicates && !window.confirm(
+      "Some files already exist in the library. Upload anyway and keep both?"
+    )) return;
+
+    setUploading(true);
 
     for (const item of staged) {
       const { file, category, notes, id } = item;
@@ -802,18 +800,6 @@ function UploadPage({ addToast, onUploadSuccess }) {
             return (
               <div className="staged-file" key={item.id} style={{ borderColor: isDone ? "var(--success)" : isErr ? "var(--danger)" : "var(--border)" }}>
                 <div className="staged-file-top">
-                  {item.duplicate && item.status === "idle" && (
-                    <div style={{
-                      display: "flex", alignItems: "center", gap: 6,
-                      padding: "6px 10px", marginBottom: 10,
-                      background: "rgba(234,179,8,0.1)",
-                      border: "1px solid #eab308",
-                      borderRadius: 8, fontSize: "0.78rem",
-                      color: "#facc15", fontFamily: "'DM Mono', monospace"
-                    }}>
-                      ⚠ A file named <strong style={{color:"#fde047"}}>{item.file.name}</strong> already exists in the library
-                    </div>
-                  )}
                   <span className="file-ext-badge" style={{ background: colors.bg, borderColor: colors.border, color: colors.text }}>
                     .{ext}
                   </span>
@@ -836,6 +822,19 @@ function UploadPage({ addToast, onUploadSuccess }) {
 
                 {item.status === "idle" && (
                   <div className="staged-file-fields">
+                    {item.duplicate && (
+                      <div style={{
+                        gridColumn: "1 / -1",
+                        display: "flex", alignItems: "center", gap: 6,
+                        padding: "6px 10px", marginBottom: 4,
+                        background: "rgba(234,179,8,0.1)",
+                        border: "1px solid #eab308",
+                        borderRadius: 8, fontSize: "0.78rem",
+                        color: "#facc15", fontFamily: "'DM Mono', monospace"
+                      }}>
+                        ⚠ A file named <strong style={{ color: "#fde047", margin: "0 4px" }}>{item.file.name}</strong> already exists in the library
+                      </div>
+                    )}
                     <div className="field-group">
                       <label className="field-label">Category</label>
                       <select
@@ -877,6 +876,14 @@ function UploadPage({ addToast, onUploadSuccess }) {
 export default function App() {
   const [page, setPage] = useState("library"); // library | upload
   const [toasts, setToasts] = useState([]);
+  const [libraryFiles, setLibraryFiles] = useState([]);
+
+  // Fetch library files once on mount so UploadPage can check duplicates
+  useEffect(() => {
+    supabase.from("embroidery_files").select("original_name").then(({ data }) => {
+      if (data) setLibraryFiles(data);
+    });
+  }, []);
 
   const addToast = (msg, type = "success") => {
     const id = Math.random().toString(36).slice(2);
@@ -884,7 +891,13 @@ export default function App() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
   };
 
-  const handleUploadSuccess = () => setPage("library");
+  const handleUploadSuccess = () => {
+    // Refresh library file list after upload so duplicates stay current
+    supabase.from("embroidery_files").select("original_name").then(({ data }) => {
+      if (data) setLibraryFiles(data);
+    });
+    setPage("library");
+  };
 
   return (
     <>
@@ -908,7 +921,7 @@ export default function App() {
         {page === "library" ? (
           <FilesPage addToast={addToast} />
         ) : (
-          <UploadPage addToast={addToast} onUploadSuccess={handleUploadSuccess} />
+          <UploadPage addToast={addToast} onUploadSuccess={handleUploadSuccess} existingFiles={libraryFiles} />
         )}
 
         <Toast toasts={toasts} />
