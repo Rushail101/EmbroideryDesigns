@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // ─── SUPABASE CONFIG ────────────────────────────────────────────────────────
 // Replace these with your actual Supabase project URL and anon key
-const SUPABASE_URL = "https://wzwpeuwhuyvqgltrafre.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6d3BldXdodXl2cWdsdHJhZnJlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjExMTUsImV4cCI6MjA5NDkzNzExNX0.USKnaUkHS8fVC2G0Q7_2GDVTZPmylAuxU3E0f5hLlGM";
+const SUPABASE_URL = "https://wzcklhpnohffvakrumkt.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6Y2tsaHBub2hmZnZha3J1bWt0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxMjM0NTQsImV4cCI6MjA5MDY5OTQ1NH0.9ShusolrWT54CQpacHzvDlQjQNh-Mcvjgch-hxqAGJc";
 const STORAGE_BUCKET = "embroidery-files";
 
 // IMPORTANT:
