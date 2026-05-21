@@ -656,16 +656,27 @@ function UploadPage({ addToast, onUploadSuccess }) {
   const inputRef = useRef();
 
   const addFiles = (fileList) => {
-    const newFiles = Array.from(fileList).map((file) => ({
-      id: Math.random().toString(36).slice(2),
-      file,
-      category: "Uncategorized",
-      notes: "",
-      progress: 0,
-      status: "idle",
+  const newFiles = Array.from(fileList).map((file) => ({
+    id: Math.random().toString(36).slice(2),
+    file,
+    category: "Uncategorized",
+    notes: "",
+    progress: 0,
+    status: "idle",
+    duplicate: false,
+  }));
+  
+  // Check for duplicates against existing files in the library
+  setStaged((prev) => {
+    const allStaged = [...prev, ...newFiles];
+    return allStaged.map((item) => ({
+      ...item,
+      duplicate: files.some(
+        (f) => f.original_name.toLowerCase() === item.file.name.toLowerCase()
+      ),
     }));
-    setStaged((prev) => [...prev, ...newFiles]);
-  };
+  });
+};
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -680,8 +691,15 @@ function UploadPage({ addToast, onUploadSuccess }) {
   const removeStaged = (id) => setStaged((prev) => prev.filter((s) => s.id !== id));
 
   const handleUpload = async () => {
-    if (staged.length === 0 || uploading) return;
-    setUploading(true);
+  if (staged.length === 0 || uploading) return;
+  
+  const hasDuplicates = staged.some((s) => s.duplicate && s.status === "idle");
+  if (hasDuplicates && !window.confirm(
+    "Some files already exist in the library. Upload anyway and keep both?"
+  )) return;
+
+  setUploading(true);
+  // ... rest of upload logic unchanged
 
     for (const item of staged) {
       const { file, category, notes, id } = item;
@@ -784,6 +802,18 @@ function UploadPage({ addToast, onUploadSuccess }) {
             return (
               <div className="staged-file" key={item.id} style={{ borderColor: isDone ? "var(--success)" : isErr ? "var(--danger)" : "var(--border)" }}>
                 <div className="staged-file-top">
+                  {item.duplicate && item.status === "idle" && (
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "6px 10px", marginBottom: 10,
+                      background: "rgba(234,179,8,0.1)",
+                      border: "1px solid #eab308",
+                      borderRadius: 8, fontSize: "0.78rem",
+                      color: "#facc15", fontFamily: "'DM Mono', monospace"
+                    }}>
+                      ⚠ A file named <strong style={{color:"#fde047"}}>{item.file.name}</strong> already exists in the library
+                    </div>
+                  )}
                   <span className="file-ext-badge" style={{ background: colors.bg, borderColor: colors.border, color: colors.text }}>
                     .{ext}
                   </span>
