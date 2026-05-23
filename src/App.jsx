@@ -3,8 +3,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // Replace these with your actual Supabase project URL and anon key
 
 // ─── SUPABASE CONFIG ────────────────────────────────────────────────────────
-const SUPABASE_URL    = "https://YOUR_SHARED_PROJECT.supabase.co"; // ← update
-const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";                         // ← update
+const SUPABASE_URL    = "https://ckzneebxjmvblxecblqc.supabase.co"; // ← update
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrem5lZWJ4am12Ymx4ZWNibHFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NTY1MDMsImV4cCI6MjA5NTAzMjUwM30.DV1fARQP7NtTCblbug3h42xUzGFzxj0gpX6PZLeFqaY";                         // ← update
 const STORAGE_BUCKET  = "embroidery-files";
 const DB_SCHEMA       = "embroidery"; // routes all table calls to this schema
 
