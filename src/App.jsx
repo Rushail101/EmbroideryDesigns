@@ -1,24 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── SUPABASE CONFIG ─────────────────────────────────────────────────────────
-// ↓ Fill in your shared Supabase project credentials
-const SUPABASE_URL     = "https://ckzneebxjmvblxecblqc.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrem5lZWJ4am12Ymx4ZWNibHFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NTY1MDMsImV4cCI6MjA5NTAzMjUwM30.DV1fARQP7NtTCblbug3h42xUzGFzxj0gpX6PZLeFqaY";
+// Reads from Vercel environment variables (VITE_ prefix required for Vite)
+const SUPABASE_URL     = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const STORAGE_BUCKET   = "embroidery-files";
+const DB_SCHEMA        = "embroidery";
 
-// ─── FIX: Use Accept-Profile header to route to the embroidery schema ─────────
-// The embroidery schema must be added to "Extra search path" in Supabase:
-//   Dashboard → Settings → API → "Extra search path"
-//   Add "embroidery" to the list and hit Save, then wait ~30s for it to apply.
-//
-// Alternatively this client routes via the Accept-Profile / Content-Profile
-// headers which work once the schema is in the exposed schemas list.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── SCHEMA-AWARE SUPABASE CLIENT (no SDK dependency) ────────────────────────
+// Uses Accept-Profile / Content-Profile headers to route to the embroidery schema.
+// Requires: Supabase Dashboard → Settings → API → Extra search path → add "embroidery"
 
-const DB_SCHEMA = "embroidery";
-
-// Schema-aware fetch helpers
-const dbHeaders = (extra = {}) => ({
+const authHeaders = (extra = {}) => ({
   apikey:        SUPABASE_ANON_KEY,
   Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
   ...extra,
@@ -30,31 +23,20 @@ const supabase = {
       try {
         const res = await fetch(
           `${SUPABASE_URL}/rest/v1/${table}?select=${cols}&order=uploaded_at.desc`,
-          {
-            headers: dbHeaders({
-              "Accept-Profile": DB_SCHEMA,
-              Accept: "application/json",
-            }),
-          }
+          { headers: authHeaders({ "Accept-Profile": DB_SCHEMA, Accept: "application/json" }) }
         );
         const text = await res.text();
         let data;
         try { data = JSON.parse(text); } catch { data = []; }
-        if (!res.ok) {
-          console.error("Supabase select error:", res.status, data);
-          return { data: [], error: data };
-        }
+        if (!res.ok) { console.error("select error:", res.status, data); return { data: [], error: data }; }
         return { data: Array.isArray(data) ? data : [], error: null };
-      } catch (err) {
-        console.error("Supabase select exception:", err);
-        return { data: [], error: err };
-      }
+      } catch (err) { console.error("select exception:", err); return { data: [], error: err }; }
     },
     insert: async (row) => {
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
           method: "POST",
-          headers: dbHeaders({
+          headers: authHeaders({
             "Content-Type":    "application/json",
             "Content-Profile": DB_SCHEMA,
             Prefer:            "return=representation",
@@ -64,62 +46,47 @@ const supabase = {
         const text = await res.text();
         let data;
         try { data = JSON.parse(text); } catch { data = null; }
-        if (!res.ok) {
-          console.error("Supabase insert error:", res.status, data);
-          return { data: null, error: data };
-        }
+        if (!res.ok) { console.error("insert error:", res.status, data); return { data: null, error: data }; }
         return { data, error: null };
-      } catch (err) {
-        console.error("Supabase insert exception:", err);
-        return { data: null, error: err };
-      }
+      } catch (err) { console.error("insert exception:", err); return { data: null, error: err }; }
     },
     delete: (_unused) => ({
       eq: async (col, val) => {
         try {
           const res = await fetch(
             `${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${val}`,
-            {
-              method: "DELETE",
-              headers: dbHeaders({ "Content-Profile": DB_SCHEMA }),
-            }
+            { method: "DELETE", headers: authHeaders({ "Content-Profile": DB_SCHEMA }) }
           );
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            console.error("Supabase delete error:", res.status, err);
-            return { error: err };
-          }
+          if (!res.ok) { const err = await res.json().catch(() => ({})); return { error: err }; }
           return { error: null };
-        } catch (err) {
-          console.error("Supabase delete exception:", err);
-          return { error: err };
-        }
+        } catch (err) { return { error: err }; }
       },
     }),
   }),
 
-  // Storage is schema-independent — no profile headers needed
   storage: {
+    // Raw binary upload — Supabase Storage requires the file bytes as the body
+    // with an explicit Content-Type. x-upsert:true overwrites if path already exists.
     upload: async (path, file) => {
       try {
         const res = await fetch(
           `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`,
           {
-            method:  "POST",
-            headers: dbHeaders(),
-            body:    file,
+            method: "POST",
+            headers: authHeaders({
+              "Content-Type": file.type || "application/octet-stream",
+              "x-upsert":     "true",
+            }),
+            body: file,
           }
         );
         const data = await res.json().catch(() => ({}));
-        return { data, error: res.ok ? null : data };
-      } catch (err) {
-        return { data: null, error: err };
-      }
+        if (!res.ok) { console.error("storage upload error:", res.status, data); return { data: null, error: data }; }
+        return { data, error: null };
+      } catch (err) { console.error("storage upload exception:", err); return { data: null, error: err }; }
     },
     getPublicUrl: (path) => ({
-      data: {
-        publicUrl: `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
-      },
+      data: { publicUrl: `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}` },
     }),
     remove: async (paths) => {
       try {
@@ -127,35 +94,29 @@ const supabase = {
           `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}`,
           {
             method:  "DELETE",
-            headers: dbHeaders({ "Content-Type": "application/json" }),
+            headers: authHeaders({ "Content-Type": "application/json" }),
             body:    JSON.stringify({ prefixes: paths }),
           }
         );
         return { error: res.ok ? null : await res.json().catch(() => ({})) };
-      } catch (err) {
-        return { error: err };
-      }
+      } catch (err) { return { error: err }; }
     },
   },
 };
 
-  },
-};
-
-// ─── CONSTANTS ──────────────────────────────────────────────────────────────
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const FILE_TYPE_COLORS = {
-  dst: { bg: "#1a3a2a", border: "#22c55e", text: "#4ade80" },
-  stx: { bg: "#1a2a3a", border: "#3b82f6", text: "#60a5fa" },
-  pes: { bg: "#2a1a3a", border: "#a855f7", text: "#c084fc" },
-  jef: { bg: "#3a2a1a", border: "#f97316", text: "#fb923c" },
-  vp3: { bg: "#3a1a1a", border: "#ef4444", text: "#f87171" },
-  exp: { bg: "#1a3a3a", border: "#06b6d4", text: "#22d3ee" },
-  hus: { bg: "#3a3a1a", border: "#eab308", text: "#facc15" },
+  dst:   { bg: "#1a3a2a", border: "#22c55e", text: "#4ade80" },
+  stx:   { bg: "#1a2a3a", border: "#3b82f6", text: "#60a5fa" },
+  pes:   { bg: "#2a1a3a", border: "#a855f7", text: "#c084fc" },
+  jef:   { bg: "#3a2a1a", border: "#f97316", text: "#fb923c" },
+  vp3:   { bg: "#3a1a1a", border: "#ef4444", text: "#f87171" },
+  exp:   { bg: "#1a3a3a", border: "#06b6d4", text: "#22d3ee" },
+  hus:   { bg: "#3a3a1a", border: "#eab308", text: "#facc15" },
   other: { bg: "#1e1e2a", border: "#6b7280", text: "#9ca3af" },
 };
 
-const ALL_TYPES = ["All Types", "dst", "stx", "pes", "jef", "vp3", "exp", "hus", "other"];
-
+const ALL_TYPES  = ["All Types", "dst", "stx", "pes", "jef", "vp3", "exp", "hus", "other"];
 const CATEGORIES = ["Uncategorized", "Logos", "Floral", "Geometric", "Text", "Animals", "Borders", "Custom"];
 
 function getExt(name) {
@@ -164,20 +125,18 @@ function getExt(name) {
   const ext = parts.pop().toLowerCase();
   return FILE_TYPE_COLORS[ext] ? ext : "other";
 }
-
 function formatBytes(bytes) {
   if (!bytes) return "—";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
-
 function formatDate(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-// ─── STYLES ─────────────────────────────────────────────────────────────────
+// ─── STYLES ──────────────────────────────────────────────────────────────────
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
 
@@ -197,10 +156,8 @@ const css = `
   }
 
   body { background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; min-height: 100vh; }
-
   .app { min-height: 100vh; display: flex; flex-direction: column; }
 
-  /* NAV */
   .nav {
     display: flex; align-items: center; justify-content: space-between;
     padding: 0 2rem; height: 64px;
@@ -208,49 +165,33 @@ const css = `
     border-bottom: 1px solid var(--border);
     position: sticky; top: 0; z-index: 100;
   }
-  .nav-brand {
-    display: flex; align-items: center; gap: 10px;
-    font-size: 1.15rem; font-weight: 800; letter-spacing: -0.5px;
-  }
+  .nav-brand { display: flex; align-items: center; gap: 10px; font-size: 1.15rem; font-weight: 800; letter-spacing: -0.5px; }
   .nav-logo {
     width: 32px; height: 32px; border-radius: 8px;
     background: linear-gradient(135deg, var(--accent), var(--accent2));
-    display: flex; align-items: center; justify-content: center;
-    font-size: 16px;
+    display: flex; align-items: center; justify-content: center; font-size: 16px;
   }
   .nav-tabs { display: flex; gap: 4px; }
   .nav-tab {
     padding: 6px 18px; border-radius: 8px; border: none; cursor: pointer;
     font-family: 'Syne', sans-serif; font-weight: 600; font-size: 0.85rem;
-    transition: all 0.15s;
-    background: transparent; color: var(--muted);
+    transition: all 0.15s; background: transparent; color: var(--muted);
   }
   .nav-tab:hover { background: var(--surface2); color: var(--text); }
   .nav-tab.active { background: var(--accent); color: #fff; }
 
-  /* MAIN PAGE */
   .page { flex: 1; padding: 2rem; max-width: 1400px; margin: 0 auto; width: 100%; }
-
   .page-header { margin-bottom: 2rem; }
   .page-title { font-size: 2rem; font-weight: 800; letter-spacing: -1px; }
-  .page-title span { 
+  .page-title span {
     background: linear-gradient(90deg, var(--accent), var(--accent2));
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
   .page-subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 4px; font-family: 'DM Mono', monospace; }
 
-  /* TOOLBAR */
-  .toolbar {
-    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
-    margin-bottom: 1.5rem;
-  }
-  .search-wrap {
-    flex: 1; min-width: 220px; position: relative;
-  }
-  .search-icon {
-    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-    color: var(--muted); font-size: 15px; pointer-events: none;
-  }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .search-wrap { flex: 1; min-width: 220px; position: relative; }
+  .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 15px; pointer-events: none; }
   .search-input {
     width: 100%; padding: 10px 12px 10px 38px;
     background: var(--surface); border: 1px solid var(--border);
@@ -260,30 +201,23 @@ const css = `
   }
   .search-input:focus { border-color: var(--accent); }
   .search-input::placeholder { color: var(--muted); }
-
   .filter-select {
     padding: 10px 14px; background: var(--surface);
     border: 1px solid var(--border); border-radius: 10px;
     color: var(--text); font-family: 'Syne', sans-serif; font-size: 0.85rem;
-    font-weight: 600; outline: none; cursor: pointer; min-width: 140px;
-    transition: border-color 0.15s;
+    font-weight: 600; outline: none; cursor: pointer; min-width: 140px; transition: border-color 0.15s;
   }
   .filter-select:focus { border-color: var(--accent); }
   .filter-select option { background: var(--surface2); }
-
   .view-toggle { display: flex; gap: 4px; background: var(--surface); border-radius: 10px; padding: 4px; border: 1px solid var(--border); }
   .view-btn {
     width: 34px; height: 34px; border: none; border-radius: 7px; cursor: pointer;
     background: transparent; color: var(--muted); font-size: 16px;
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.15s;
+    display: flex; align-items: center; justify-content: center; transition: all 0.15s;
   }
   .view-btn.active { background: var(--accent); color: #fff; }
 
-  /* STATS BAR */
-  .stats-bar {
-    display: flex; gap: 16px; margin-bottom: 1.5rem; flex-wrap: wrap;
-  }
+  .stats-bar { display: flex; gap: 16px; margin-bottom: 1.5rem; flex-wrap: wrap; }
   .stat-chip {
     display: flex; align-items: center; gap: 6px;
     padding: 6px 12px; border-radius: 20px;
@@ -292,23 +226,14 @@ const css = `
   }
   .stat-dot { width: 8px; height: 8px; border-radius: 50%; }
 
-  /* GRID */
-  .files-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 16px;
-  }
-
-  /* LIST */
+  .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
   .files-list { display: flex; flex-direction: column; gap: 8px; }
   .list-header {
     display: grid; grid-template-columns: 2fr 80px 100px 120px 80px 80px;
     padding: 8px 16px; color: var(--muted);
-    font-size: 0.75rem; font-family: 'DM Mono', monospace; letter-spacing: 0.5px;
-    text-transform: uppercase;
+    font-size: 0.75rem; font-family: 'DM Mono', monospace; letter-spacing: 0.5px; text-transform: uppercase;
   }
 
-  /* FILE CARD */
   .file-card {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 14px; padding: 20px;
@@ -322,20 +247,15 @@ const css = `
   }
   .file-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 32px rgba(124,106,247,0.15); }
   .file-card:hover::before { opacity: 1; }
-
   .file-card-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
   .file-ext-badge {
     padding: 4px 10px; border-radius: 6px; font-family: 'DM Mono', monospace;
-    font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;
-    border: 1px solid;
+    font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; border: 1px solid;
   }
   .file-icon { font-size: 2rem; margin-bottom: 10px; }
-  .file-name {
-    font-size: 0.9rem; font-weight: 700; word-break: break-all;
-    margin-bottom: 6px; line-height: 1.3;
-  }
+  .file-name { font-size: 0.9rem; font-weight: 700; word-break: break-all; margin-bottom: 6px; line-height: 1.3; }
   .file-meta { color: var(--muted); font-size: 0.75rem; font-family: 'DM Mono', monospace; line-height: 1.7; }
-  .file-category { 
+  .file-category {
     display: inline-block; margin-top: 8px;
     padding: 2px 8px; border-radius: 4px;
     background: var(--surface2); border: 1px solid var(--border);
@@ -352,13 +272,11 @@ const css = `
   .btn-del { background: transparent; color: var(--muted); }
   .btn-del:hover { background: rgba(239,68,68,0.1); border-color: var(--danger); color: var(--danger); }
 
-  /* FILE ROW (list view) */
   .file-row {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; padding: 12px 16px;
     display: grid; grid-template-columns: 2fr 80px 100px 120px 80px 80px;
-    align-items: center; transition: all 0.15s;
-    animation: fadeUp 0.2s ease both;
+    align-items: center; transition: all 0.15s; animation: fadeUp 0.2s ease both;
   }
   .file-row:hover { border-color: var(--accent); background: var(--surface2); }
   .row-name { font-size: 0.88rem; font-weight: 600; display: flex; align-items: center; gap: 8px; overflow: hidden; }
@@ -373,17 +291,12 @@ const css = `
   .icon-btn:hover.dl { background: var(--accent); border-color: var(--accent); color: #fff; }
   .icon-btn:hover.del { background: rgba(239,68,68,0.1); border-color: var(--danger); color: var(--danger); }
 
-  /* EMPTY */
-  .empty {
-    text-align: center; padding: 80px 20px; color: var(--muted);
-  }
+  .empty { text-align: center; padding: 80px 20px; color: var(--muted); }
   .empty-icon { font-size: 4rem; margin-bottom: 16px; opacity: 0.4; }
   .empty-title { font-size: 1.2rem; font-weight: 700; margin-bottom: 6px; color: var(--text); }
   .empty-sub { font-size: 0.85rem; font-family: 'DM Mono', monospace; }
 
-  /* UPLOAD PAGE */
   .upload-page { max-width: 720px; margin: 0 auto; width: 100%; padding: 2rem; }
-
   .dropzone {
     border: 2px dashed var(--border); border-radius: 20px;
     padding: 60px 40px; text-align: center; cursor: pointer;
@@ -394,9 +307,7 @@ const css = `
   .dropzone-icon { font-size: 3.5rem; margin-bottom: 16px; }
   .dropzone-title { font-size: 1.3rem; font-weight: 700; margin-bottom: 8px; }
   .dropzone-sub { color: var(--muted); font-size: 0.85rem; font-family: 'DM Mono', monospace; line-height: 1.6; }
-  .dropzone-formats {
-    display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-top: 16px;
-  }
+  .dropzone-formats { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-top: 16px; }
   .format-pill {
     padding: 3px 10px; border-radius: 20px; font-size: 0.72rem;
     font-family: 'DM Mono', monospace; font-weight: 500; text-transform: uppercase;
@@ -404,10 +315,8 @@ const css = `
   }
   .file-input-hidden { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
 
-  /* STAGED FILES */
   .staged-section { margin-top: 24px; }
   .staged-title { font-size: 0.85rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; font-family: 'DM Mono', monospace; }
-
   .staged-file {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 12px; padding: 16px; margin-bottom: 10px;
@@ -429,16 +338,13 @@ const css = `
   .remove-staged {
     width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border);
     background: transparent; cursor: pointer; color: var(--muted); font-size: 16px;
-    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-    transition: all 0.15s;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s;
   }
   .remove-staged:hover { background: rgba(239,68,68,0.1); border-color: var(--danger); color: var(--danger); }
 
-  /* PROGRESS */
   .progress-bar-wrap { margin-top: 6px; height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; }
   .progress-bar { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 99px; transition: width 0.3s; }
 
-  /* UPLOAD BTN */
   .upload-actions { margin-top: 24px; display: flex; gap: 12px; }
   .btn-primary {
     flex: 1; padding: 14px; border: none; border-radius: 12px;
@@ -455,18 +361,15 @@ const css = `
   }
   .btn-secondary:hover { border-color: var(--muted); }
 
-  /* TOAST */
   .toast-wrap { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 999; }
   .toast {
     padding: 12px 18px; border-radius: 12px; font-size: 0.85rem; font-weight: 600;
     display: flex; align-items: center; gap: 8px; min-width: 260px;
-    animation: slideIn 0.25s ease;
-    border: 1px solid;
+    animation: slideIn 0.25s ease; border: 1px solid;
   }
   .toast.success { background: rgba(34,197,94,0.15); border-color: var(--success); color: var(--success); }
   .toast.error { background: rgba(239,68,68,0.15); border-color: var(--danger); color: var(--danger); }
 
-  /* LOADING */
   .loading { display: flex; align-items: center; justify-content: center; padding: 80px; }
   .spinner {
     width: 36px; height: 36px; border: 3px solid var(--border);
@@ -474,7 +377,6 @@ const css = `
     animation: spin 0.7s linear infinite;
   }
 
-  /* CONFIRM MODAL */
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
     z-index: 200; display: flex; align-items: center; justify-content: center;
@@ -498,7 +400,7 @@ const css = `
   @keyframes spin { to { transform: rotate(360deg); } }
 `;
 
-// ─── TOAST ───────────────────────────────────────────────────────────────────
+// ─── TOAST ────────────────────────────────────────────────────────────────────
 function Toast({ toasts }) {
   return (
     <div className="toast-wrap">
@@ -589,27 +491,32 @@ function FileRow({ file, onDelete, onDownload }) {
   );
 }
 
-// ─── MAIN FILES PAGE ─────────────────────────────────────────────────────────
+// ─── MAIN FILES PAGE ──────────────────────────────────────────────────────────
 function FilesPage({ addToast }) {
-  const [files, setFiles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [files, setFiles]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [search, setSearch]     = useState("");
   const [typeFilter, setTypeFilter] = useState("All Types");
-  const [view, setView] = useState("grid"); // grid | list
+  const [view, setView]         = useState("grid");
   const [deleteTarget, setDeleteTarget] = useState(null);
 
   const fetchFiles = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.from("embroidery_files").select("*");
-    if (error) addToast("Failed to load files", "error");
-    else setFiles(data || []);
+    if (error) {
+      console.error("fetchFiles error:", error);
+      addToast("Failed to load files — check console for details", "error");
+    } else {
+      setFiles(data || []);
+    }
     setLoading(false);
   }, [addToast]);
 
   useEffect(() => { fetchFiles(); }, [fetchFiles]);
 
   const filtered = files.filter((f) => {
-    const matchSearch = (f.original_name || "").toLowerCase().includes(search.toLowerCase()) ||
+    const matchSearch =
+      (f.original_name || "").toLowerCase().includes(search.toLowerCase()) ||
       (f.notes || "").toLowerCase().includes(search.toLowerCase()) ||
       (f.category || "").toLowerCase().includes(search.toLowerCase());
     const ext = getExt(f.original_name || "");
@@ -633,7 +540,6 @@ function FilesPage({ addToast }) {
     addToast(`Deleted ${file.original_name}`, "success");
   };
 
-  // Stats
   const typeCounts = {};
   files.forEach((f) => {
     const ext = getExt(f.original_name || "");
@@ -653,7 +559,6 @@ function FilesPage({ addToast }) {
         </div>
       </div>
 
-      {/* Stats chips */}
       {!loading && files.length > 0 && (
         <div className="stats-bar">
           {Object.entries(typeCounts).slice(0, 6).map(([ext, count]) => {
@@ -669,7 +574,6 @@ function FilesPage({ addToast }) {
         </div>
       )}
 
-      {/* Toolbar */}
       <div className="toolbar">
         <div className="search-wrap">
           <span className="search-icon">⌕</span>
@@ -691,7 +595,6 @@ function FilesPage({ addToast }) {
         </div>
       </div>
 
-      {/* Content */}
       {loading ? (
         <div className="loading"><div className="spinner" /></div>
       ) : filtered.length === 0 ? (
@@ -725,21 +628,20 @@ function FilesPage({ addToast }) {
 // ─── UPLOAD PAGE ──────────────────────────────────────────────────────────────
 function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
   const [dragging, setDragging] = useState(false);
-  const [staged, setStaged] = useState([]); // { file, category, notes, progress, status, duplicate }
+  const [staged, setStaged]     = useState([]);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef();
 
   const addFiles = (fileList) => {
     const newFiles = Array.from(fileList).map((file) => ({
-      id: Math.random().toString(36).slice(2),
+      id:        Math.random().toString(36).slice(2),
       file,
-      category: "Uncategorized",
-      notes: "",
-      progress: 0,
-      status: "idle",
+      category:  "Uncategorized",
+      notes:     "",
+      progress:  0,
+      status:    "idle",
       duplicate: false,
     }));
-
     setStaged((prev) => {
       const allStaged = [...prev, ...newFiles];
       return allStaged.map((item) => ({
@@ -776,33 +678,35 @@ function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
     for (const item of staged) {
       const { file, category, notes, id } = item;
       updateStaged(id, "status", "uploading");
+      updateStaged(id, "progress", 10);
 
-      // Unique storage path
       const timestamp = Date.now();
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = `${timestamp}_${safeName}`;
+      const safeName  = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path      = `${timestamp}_${safeName}`;
 
-      // Upload to Supabase Storage
+      // Upload file to storage
       const { error: storageErr } = await supabase.storage.upload(path, file);
       if (storageErr) {
+        console.error("Storage upload failed:", storageErr);
         updateStaged(id, "status", "error");
         addToast(`Failed to upload ${file.name}`, "error");
         continue;
       }
 
-      updateStaged(id, "progress", 60);
+      updateStaged(id, "progress", 70);
 
-      // Insert metadata row
+      // Insert metadata into DB
       const { error: dbErr } = await supabase.from("embroidery_files").insert({
         original_name: file.name,
-        file_type: file.name.split(".").pop().toLowerCase(),
-        size_bytes: file.size,
-        storage_path: path,
+        file_type:     file.name.split(".").pop().toLowerCase(),
+        size_bytes:    file.size,
+        storage_path:  path,
         category,
         notes,
       });
 
       if (dbErr) {
+        console.error("DB insert failed:", dbErr);
         updateStaged(id, "status", "error");
         addToast(`DB error for ${file.name}`, "error");
       } else {
@@ -826,7 +730,6 @@ function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
         <div className="page-subtitle">Any embroidery format accepted · DST, STX, PES, JEF, VP3…</div>
       </div>
 
-      {/* Drop Zone */}
       <div
         className={`dropzone ${dragging ? "dragging" : ""}`}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -862,15 +765,14 @@ function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
         </div>
       </div>
 
-      {/* Staged files */}
       {staged.length > 0 && (
         <div className="staged-section">
           <div className="staged-title">{staged.length} file{staged.length !== 1 ? "s" : ""} queued</div>
           {staged.map((item) => {
-            const ext = getExt(item.file.name);
+            const ext    = getExt(item.file.name);
             const colors = FILE_TYPE_COLORS[ext] || FILE_TYPE_COLORS.other;
             const isDone = item.status === "done";
-            const isErr = item.status === "error";
+            const isErr  = item.status === "error";
             return (
               <div className="staged-file" key={item.id} style={{ borderColor: isDone ? "var(--success)" : isErr ? "var(--danger)" : "var(--border)" }}>
                 <div className="staged-file-top">
@@ -885,7 +787,7 @@ function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
                     <button className="remove-staged" onClick={() => removeStaged(item.id)}>✕</button>
                   )}
                   {isDone && <span style={{ color: "var(--success)", fontSize: "18px" }}>✓</span>}
-                  {isErr && <span style={{ color: "var(--danger)", fontSize: "18px" }}>✕</span>}
+                  {isErr  && <span style={{ color: "var(--danger)",  fontSize: "18px" }}>✕</span>}
                 </div>
 
                 {item.status === "uploading" && (
@@ -906,7 +808,7 @@ function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
                         borderRadius: 8, fontSize: "0.78rem",
                         color: "#facc15", fontFamily: "'DM Mono', monospace"
                       }}>
-                        ⚠ A file named <strong style={{ color: "#fde047", margin: "0 4px" }}>{item.file.name}</strong> already exists in the library
+                        ⚠ A file named <strong style={{ color: "#fde047", margin: "0 4px" }}>{item.file.name}</strong> already exists
                       </div>
                     )}
                     <div className="field-group">
@@ -937,7 +839,10 @@ function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
           <div className="upload-actions">
             <button className="btn-secondary" onClick={() => setStaged([])} disabled={uploading}>Clear All</button>
             <button className="btn-primary" onClick={handleUpload} disabled={uploading}>
-              {uploading ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /> Uploading…</> : `↑ Upload ${staged.length} File${staged.length !== 1 ? "s" : ""}`}
+              {uploading
+                ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /> Uploading…</>
+                : `↑ Upload ${staged.length} File${staged.length !== 1 ? "s" : ""}`
+              }
             </button>
           </div>
         </div>
@@ -948,11 +853,10 @@ function UploadPage({ addToast, onUploadSuccess, existingFiles }) {
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage] = useState("library"); // library | upload
-  const [toasts, setToasts] = useState([]);
+  const [page, setPage]               = useState("library");
+  const [toasts, setToasts]           = useState([]);
   const [libraryFiles, setLibraryFiles] = useState([]);
 
-  // Fetch library files once on mount so UploadPage can check duplicates
   useEffect(() => {
     supabase.from("embroidery_files").select("original_name").then(({ data }) => {
       if (data) setLibraryFiles(data);
@@ -966,7 +870,6 @@ export default function App() {
   };
 
   const handleUploadSuccess = () => {
-    // Refresh library file list after upload so duplicates stay current
     supabase.from("embroidery_files").select("original_name").then(({ data }) => {
       if (data) setLibraryFiles(data);
     });
