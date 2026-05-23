@@ -1,17 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // ─── SUPABASE CONFIG ────────────────────────────────────────────────────────
 // Replace these with your actual Supabase project URL and anon key
-const SUPABASE_URL = "https://wzcklhpnohffvakrumkt.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6Y2tsaHBub2hmZnZha3J1bWt0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxMjM0NTQsImV4cCI6MjA5MDY5OTQ1NH0.9ShusolrWT54CQpacHzvDlQjQNh-Mcvjgch-hxqAGJc";
-const STORAGE_BUCKET = "embroidery-files";
 
-// Minimal Supabase client (no SDK dependency)
+// ─── SUPABASE CONFIG ────────────────────────────────────────────────────────
+const SUPABASE_URL    = "https://YOUR_SHARED_PROJECT.supabase.co"; // ← update
+const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";                         // ← update
+const STORAGE_BUCKET  = "embroidery-files";
+const DB_SCHEMA       = "embroidery"; // routes all table calls to this schema
+
+// Minimal Supabase client (no SDK dependency) — schema-aware
 const supabase = {
   from: (table) => ({
     select: async (cols = "*") => {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=${cols}&order=uploaded_at.desc`, {
-        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-      });
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/${table}?select=${cols}&order=uploaded_at.desc`,
+        {
+          headers: {
+            apikey:           SUPABASE_ANON_KEY,
+            Authorization:    `Bearer ${SUPABASE_ANON_KEY}`,
+            "Accept-Profile": DB_SCHEMA,   // ← tells PostgREST: use embroidery schema
+          },
+        }
+      );
       const data = await res.json();
       return { data, error: res.ok ? null : data };
     },
@@ -19,10 +29,11 @@ const supabase = {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
         method: "POST",
         headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          "Content-Type": "application/json",
-          Prefer: "return=representation",
+          apikey:             SUPABASE_ANON_KEY,
+          Authorization:      `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type":     "application/json",
+          Prefer:             "return=representation",
+          "Content-Profile":  DB_SCHEMA,   // ← tells PostgREST: write to embroidery schema
         },
         body: JSON.stringify(row),
       });
@@ -31,41 +42,62 @@ const supabase = {
     },
     delete: (id) => ({
       eq: async (col, val) => {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${val}`, {
-          method: "DELETE",
-          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-        });
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${val}`,
+          {
+            method: "DELETE",
+            headers: {
+              apikey:             SUPABASE_ANON_KEY,
+              Authorization:      `Bearer ${SUPABASE_ANON_KEY}`,
+              "Content-Profile":  DB_SCHEMA,  // ← schema for DELETE
+            },
+          }
+        );
         return { error: res.ok ? null : await res.json() };
       },
     }),
   }),
+
+  // Storage is schema-independent — no headers needed here
   storage: {
     upload: async (path, file) => {
-      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`, {
-        method: "POST",
-        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-        body: file,
-      });
+      const res = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`,
+        {
+          method: "POST",
+          headers: {
+            apikey:        SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: file,
+        }
+      );
       const data = await res.json();
       return { data, error: res.ok ? null : data };
     },
     getPublicUrl: (path) => ({
-      data: { publicUrl: `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}` },
+      data: {
+        publicUrl: `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
+      },
     }),
     remove: async (paths) => {
-      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}`, {
-        method: "DELETE",
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ prefixes: paths }),
-      });
+      const res = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}`,
+        {
+          method: "DELETE",
+          headers: {
+            apikey:           SUPABASE_ANON_KEY,
+            Authorization:    `Bearer ${SUPABASE_ANON_KEY}`,
+            "Content-Type":   "application/json",
+          },
+          body: JSON.stringify({ prefixes: paths }),
+        }
+      );
       return { error: res.ok ? null : await res.json() };
     },
   },
 };
+
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────────────
 const FILE_TYPE_COLORS = {
